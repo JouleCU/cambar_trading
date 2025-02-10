@@ -69,7 +69,7 @@ def obtener_saldo():
     balance = exchange.fetch_balance()
     usdt_disponible = balance['total']['USDT']
     floki_disponible = balance['total']['FLOKI']
-    logger.info("Saldo obtenido")
+    logger.info(f"Saldo obtenido FLOKI: {floki_disponible}, USDT: {usdt_disponible}",)
     return usdt_disponible, floki_disponible
 
 # Calcular rentabilidad acumulada semanal
@@ -90,12 +90,14 @@ def colocar_orden(tipo, precio):
 
         order = exchange.create_order(symbol, 'limit', tipo, cantidad, precio)
         mensaje = f"✅ ORDEN {tipo.upper()} EJECUTADA: {cantidad:.2f} FLOKI a {precio} USDT"
-        enviar_alerta_telegram(mensaje)
         logger.info(mensaje)
+        enviar_alerta_telegram(mensaje)
+        
     except Exception as e:
         mensaje = f"❌ ERROR en orden {tipo.upper()}: {e}"
-        enviar_alerta_telegram(mensaje)
         logger.error(mensaje)
+        enviar_alerta_telegram(mensaje)
+        
 
 # Monitorear mercado y ejecutar órdenes
 def monitorear_mercado():
@@ -104,10 +106,11 @@ def monitorear_mercado():
             logger.info("Inicio iterarion")
             ganancia_actual = calcular_ganancia_semanal()
             proteccion_minima = meta_rentabilidad_semanal * porcentaje_proteccion
-            logger.info(ganancia_actual)
+            logger.info(f'Ganancia actual: {ganancia_actual}')
             if ganancia_actual >= meta_rentabilidad_semanal:
                 mensaje = f"🎯 Meta de ganancia semanal alcanzada: {ganancia_actual:.2f} USDT. Siguiendo operaciones pero protegiendo al menos {proteccion_minima:.2f} USDT."
                 enviar_alerta_telegram(mensaje)
+                logger.error(mensaje)
                 
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=100)
             data = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -122,6 +125,7 @@ def monitorear_mercado():
 
             compra_realizada = False
             venta_realizada = False
+            logger.info(f'Ultimo precio: {ultimo_precio}')
 
             if ultimo_precio <= niveles_fibonacci['78.6%']:  # Stop-Loss dinámico con ATR
                 colocar_orden('sell', ultimo_precio)
