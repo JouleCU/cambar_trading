@@ -5,6 +5,9 @@ import pandas as pd
 import numpy as np
 import os
 from dotenv import load_dotenv
+from loguru import logger
+
+from message import enviar_alerta_telegram
 
 load_dotenv() 
 
@@ -23,10 +26,6 @@ exchange = getattr(ccxt, exchange_id)({
 telegram_bot_token = os.getenv('TELEGRAM_BOT_ID')
 telegram_chat_id =  os.getenv('TELEGRAM_CHAT_ID')
 
-def enviar_alerta_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
-    payload = {'chat_id': telegram_chat_id, 'text': mensaje}
-    requests.post(url, data=payload)
 
 # Pares de trading y configuración de indicadores
 symbol = 'FLOKI/USDT'
@@ -50,6 +49,7 @@ def calcular_niveles_fibonacci(data):
         '1.272': max_price + diff * 1.272,
         '1.618': max_price + diff * 1.618
     }
+    logger.info("Niveles Fibonacci calculados")
     return niveles_fibonacci
 
 # Función para calcular EMA
@@ -69,13 +69,14 @@ def obtener_saldo():
     balance = exchange.fetch_balance()
     usdt_disponible = balance['total']['USDT']
     floki_disponible = balance['total']['FLOKI']
+    logger.info("Saldo obtenido")
     return usdt_disponible, floki_disponible
 
 # Calcular rentabilidad acumulada semanal
 def calcular_ganancia_semanal():
     historial = exchange.fetch_my_trades(symbol, limit=100)
-    print("Obtuvo historial")
     ganancia = sum(trade['cost'] for trade in historial if trade['side'] == 'sell') - sum(trade['cost'] for trade in historial if trade['side'] == 'buy')
+    logger.info("Ganancia semanal calculada")
     return ganancia
 
 # Ejecutar orden de compra o venta
@@ -90,24 +91,23 @@ def colocar_orden(tipo, precio):
         order = exchange.create_order(symbol, 'limit', tipo, cantidad, precio)
         mensaje = f"✅ ORDEN {tipo.upper()} EJECUTADA: {cantidad:.2f} FLOKI a {precio} USDT"
         enviar_alerta_telegram(mensaje)
-        print(mensaje)
+        logger.info(mensaje)
     except Exception as e:
         mensaje = f"❌ ERROR en orden {tipo.upper()}: {e}"
         enviar_alerta_telegram(mensaje)
-        print(mensaje)
+        logger.error(mensaje)
 
 # Monitorear mercado y ejecutar órdenes
 def monitorear_mercado():
     while True:
         try:
-            print("Inicio iterarion")
+            logger.info("Inicio iterarion")
             ganancia_actual = calcular_ganancia_semanal()
             proteccion_minima = meta_rentabilidad_semanal * porcentaje_proteccion
-            print(ganancia_actual)
+            logger.info(ganancia_actual)
             if ganancia_actual >= meta_rentabilidad_semanal:
                 mensaje = f"🎯 Meta de ganancia semanal alcanzada: {ganancia_actual:.2f} USDT. Siguiendo operaciones pero protegiendo al menos {proteccion_minima:.2f} USDT."
                 enviar_alerta_telegram(mensaje)
-                print("enviado a telegram")
                 
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=100)
             data = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -140,11 +140,13 @@ def monitorear_mercado():
             if (ultimo_precio >= niveles_fibonacci['1.618'] and not venta_realizada):
                 colocar_orden('sell', ultimo_precio)
                 venta_realizada = True
-            print("Esperar 1 minuto")
+            logger.info("Esperar 1 minuto")
             time.sleep(60)
             
         except Exception as e:
-            print(f"Error: {e}")
+            logger.error(f"Error: {e}")
             time.sleep(60)
 
-enviar_alerta_telegram("Hola")
+
+if __name__ == "__main__":
+    monitorear_mercado()
