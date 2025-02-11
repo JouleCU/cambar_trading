@@ -2,7 +2,6 @@ import ccxt
 import time
 from loguru import logger
 import os
-from telegram import Bot
 from dotenv import load_dotenv
 from message import enviar_alerta_telegram
 
@@ -20,7 +19,6 @@ binance = ccxt.binance({
     'secret': BINANCE_SECRET_KEY,
     'options': {'defaultType': 'spot'}
 })
-telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 # Configuración de activos y estrategias
 assets = {
