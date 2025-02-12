@@ -18,6 +18,12 @@ binance = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'secret': BINANCE_SECRET_KEY,
     'options': {'defaultType': 'spot'},
+    'urls': {
+        'api': {
+            'public': 'https://api.binance.com',
+            'private': 'https://api.binance.com',
+        }
+    },
     'fetchOptions': {
         'forceIPv4': True  # Forzar uso de IPv4
     }
