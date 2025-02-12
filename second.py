@@ -17,7 +17,10 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 binance = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'secret': BINANCE_SECRET_KEY,
-    'options': {'defaultType': 'spot'}
+    'options': {'defaultType': 'spot'},
+    'fetchOptions': {
+        'forceIPv4': True  # Forzar uso de IPv4
+    }
 })
 
 # Configuración de activos y estrategias
