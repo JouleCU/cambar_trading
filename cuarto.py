@@ -2,10 +2,11 @@ import ccxt
 import time
 import logging
 import os
+import threading
 from dotenv import load_dotenv
 from message import enviar_alerta_telegram
 
-load_dotenv() 
+load_dotenv()
 
 # Cargar credenciales de variables de entorno
 BINANCE_API_KEY = os.getenv('API_KEY')
@@ -67,64 +68,66 @@ def get_dynamic_capital():
         enviar_alerta_telegram(f'⚠️ Error al obtener balance: {e}')
         return {}
 
-# Función de trading automatizado
-def trade():
+# Función de trading para cada activo
+def trade(symbol, params):
     while True:
-        assets_con_capital = get_dynamic_capital()
-        logging.info(f"Assets with capital {assets_con_capital}")
-        if not assets_con_capital:
-            enviar_alerta_telegram('⚠️ No hay capital disponible para operar.')
-            time.sleep(10)
+        price = get_price(symbol)
+        if price is None:
             continue
         
-        for symbol, params in assets_con_capital.items():
+        try:
+            trade_amount = params['capital'] / price
+            if params['capital'] > 0:
+                if str.upper(os.getenv('BUY')) == "YES":
+                    order = binance.create_market_buy_order(symbol, trade_amount)
+                entry_price = price
+                tp_price = entry_price * (1 + params['tp'])
+                sl_price = entry_price * (1 - params['sl'])
+                enviar_alerta_telegram(f'🚀 Compra en {symbol} a {entry_price}\nTP: {tp_price} | SL: {sl_price}')
+        except Exception as e:
+            logging.error(f'Error en la compra de {symbol}: {e}')
+            enviar_alerta_telegram(f'⚠️ Error en la compra de {symbol}: {e}')
+            continue
+        
+        while True:
             price = get_price(symbol)
+            print(f'Precio actual {symbol}: {price}')
             if price is None:
                 continue
             try:
-                print(params)
-                print(f'Price: {price}')
-                trade_amount = params['capital'] / price
-                
-                # Comprar si hay capital suficiente
-                if params['capital'] > 0:
-                    print(trade_amount)
-                    #order = binance.create_market_buy_order(symbol, trade_amount)
-                    entry_price = price
-                    tp_price = entry_price * (1 + params['tp'])
-                    sl_price = entry_price * (1 - params['sl'])
-                    enviar_alerta_telegram(f'🚀 Compra en {symbol} a {entry_price}\nTP: {tp_price} | SL: {sl_price}')
-            except Exception as e:
-                logging.error(f'Error en la compra de {symbol}: {e}')
-                enviar_alerta_telegram(f'⚠️ Error en la compra de {symbol}: {e}')
-                continue
-            
-            # Verificar si alcanza TP o SL dinámicamente
-            while True:
-                price = get_price(symbol)
-                print(price)
-                if price is None:
-                    continue
-
-                try:
-                    if price >= tp_price or price <= sl_price:
-                        #binance.create_market_sell_order(symbol, trade_amount)
-                        enviar_alerta_telegram(f'✅ Venta realizada para {symbol} a {price}')
-                        break
-                except Exception as e:
-                    logging.error(f'Error en la venta de {symbol}: {e}')
-                    enviar_alerta_telegram(f'⚠️ Error en la venta de {symbol}: {e}')
+                if price >= tp_price or price <= sl_price:
+                    if str.upper(os.getenv('SELL')) == "YES":
+                        binance.create_market_sell_order(symbol, trade_amount)
+                    enviar_alerta_telegram(f'✅ Venta realizada para {symbol} a {price}')
                     break
-            
-        time.sleep(60)  # Ajuste para mayor rapidez en toma de decisiones
+            except Exception as e:
+                logging.error(f'Error en la venta de {symbol}: {e}')
+                enviar_alerta_telegram(f'⚠️ Error en la venta de {symbol}: {e}')
+                break
+        
+        time.sleep(10)  # Ajuste para mayor rapidez en toma de decisiones
 
+# Función principal para iniciar múltiples hilos
+def start_trading():
+    assets_con_capital = get_dynamic_capital()
+    if not assets_con_capital:
+        enviar_alerta_telegram('⚠️ No hay capital disponible para operar.')
+        return
+    
+    threads = []
+    for symbol, params in assets_con_capital.items():
+        thread = threading.Thread(target=trade, args=(symbol, params))
+        thread.start()
+        threads.append(thread)
+    
+    for thread in threads:
+        thread.join()
 
-# Iniciar el bot de trading y Telegram
+# Iniciar el bot de trading en paralelo
 if __name__ == '__main__':
-
     try:
         enviar_alerta_telegram('🤖 Bot de trading optimizado iniciado.')
-        trade()
+        start_trading()
     except Exception as e:
         logging.error(f'Error en el bot: {e}')
         enviar_alerta_telegram(f'⚠️ Error en el bot: {e}')
