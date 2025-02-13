@@ -11,4 +11,4 @@ COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Ejecuta el script al iniciar el contenedor
-CMD ["python", "second.py"]
+CMD ["python", "cuarto.py"]
