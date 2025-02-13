@@ -105,7 +105,7 @@ def trade(symbol, params):
                 enviar_alerta_telegram(f'⚠️ Error en la venta de {symbol}: {e}')
                 break
         
-        time.sleep(10)  # Ajuste para mayor rapidez en toma de decisiones
+        time.sleep(int(os.getenv('WAIT_TIME')))  # Ajuste para mayor rapidez en toma de decisiones
 
 # Función principal para iniciar múltiples hilos
 def start_trading():
