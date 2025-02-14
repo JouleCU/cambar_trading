@@ -149,3 +149,4 @@ if __name__ == '__main__':
     except Exception as e:
         logging.error(f'Error en el bot: {e}')
         enviar_alerta_telegram(f'⚠️ Error en el bot: {e}')
+
