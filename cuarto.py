@@ -1,7 +1,12 @@
 import ccxt
 import asyncio
-import logging
+from loguru import logger
 import os
+import threading
+import time
+
+import concurrent.futures
+
 import ta
 import pandas as pd
 from dotenv import load_dotenv
@@ -75,11 +80,12 @@ def get_market_data(symbol):
         
         return df
     except Exception as e:
-        logging.error(f'Error al obtener datos de {symbol}: {e}')
+        logger.error(f'Error al obtener datos de {symbol}: {e}')
         return None
 
 # Función para ejecutar estrategias de compra y venta
 def ejecutar_trade(symbol, params):
+    logger.info(params)
     df = get_market_data(symbol)
     if df is None:
         return
@@ -96,14 +102,14 @@ def ejecutar_trade(symbol, params):
     
     # Estrategia de compra
     if ('Elliott_Wave_2' in df['wave'].values or 'Elliott_Wave_4' in df['wave'].values or 'Elliott_Wave_A' in df['wave'].values or 'Elliott_Wave_C' in df['wave'].values) and rsi < 40 and macd > 0 and ema_7 > ema_25 and adx > 25 and volume > volume_ma:
-        if str.upper(os.getenv('BUY')) == "YES":
-            order = binance.create_market_buy_order(symbol, trade_amount)
+        #if str.upper(os.getenv('BUY')) == "YES":
+            #order = binance.create_market_buy_order(symbol, trade_amount)
         enviar_alerta_telegram(f'🚀 Compra en {symbol} a {price}')
     
     # Estrategia de venta
     if ('Elliott_Wave_B' in df['wave'].values or 'Elliott_Wave_3' in df['wave'].values or 'Elliott_Wave_5' in df['wave'].values or rsi > 70 or macd < 0 or ema_7 < ema_25):
-        if str.upper(os.getenv('SELL')) == "YES":
-            binance.create_market_sell_order(symbol, trade_amount)
+        #if str.upper(os.getenv('SELL')) == "YES":
+            #binance.create_market_sell_order(symbol, trade_amount)
         enviar_alerta_telegram(f'✅ Venta en {symbol} a {price}')
 
 # Función para obtener balance y distribuir capital dinámicamente
@@ -111,7 +117,7 @@ def get_dynamic_capital():
     try:
         balance = binance.fetch_balance()
         usdt_balance = balance['total'].get('USDT', 0)
-        
+        logger.info(usdt_balance)
         if usdt_balance >= UMBRAL_CAPITAL:
             withdraw_amount = min(RETIRO_SEMANAL, usdt_balance - UMBRAL_CAPITAL)
             enviar_alerta_telegram(f'🔄 Retirando {withdraw_amount} USDT. Resto será reutilizado como capital.')
@@ -124,29 +130,42 @@ def get_dynamic_capital():
         capital_por_activo = usdt_balance / num_activos
         for symbol in assets:
             assets[symbol]['capital'] = capital_por_activo
+        logger.info("Se obtuvo el capital")
         return assets
     except Exception as e:
-        logging.error(f'Error al obtener balance: {e}')
+        logger.error(f'Error al obtener balance: {e}')
         enviar_alerta_telegram(f'⚠️ Error al obtener balance: {e}')
         return {}
 
-# Iniciar el bot
-def iniciar_bot():
-    dynamic_assets = get_dynamic_capital()
-    if not dynamic_assets:
-        logging.error('⚠️ No hay capital disponible para operar.')
-        return
-    for symbol, params in assets.items():
-        ejecutar_trade(symbol, params)
     
+def start_trading():
+    logger.info("Nuevo ciclo del bot")
+    assets_con_capital = get_dynamic_capital()
+    if not assets_con_capital:
+        enviar_alerta_telegram('⚠️ No hay capital disponible para operar.')
+        return
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_symbol = {
+            executor.submit(ejecutar_trade, symbol, params): symbol
+            for symbol, params in assets_con_capital.items()
+        }
+        for future in concurrent.futures.as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                future.result()  # Catch any exceptions from the thread
+            except Exception as e:
+                print(f"Error in trade {symbol}: {e}")
+
+
 if __name__ == '__main__':
 
     try:
         enviar_alerta_telegram('🤖 Bot de trading optimizado iniciado.')
         while True:
-            iniciar_bot()
-            asyncio.sleep(60)  # Intervalo de verificación
+            start_trading()
+            time.sleep(60)  # Intervalo de verificación
     except Exception as e:
-        logging.error(f'Error en el bot: {e}')
+        logger.error(f'Error en el bot: {e}')
         enviar_alerta_telegram(f'⚠️ Error en el bot: {e}')
 
