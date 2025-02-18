@@ -1,5 +1,5 @@
 import ccxt
-import asyncio
+from dataclasses import dataclass
 from loguru import logger
 import os
 import threading
@@ -41,6 +41,36 @@ UMBRAL_CAPITAL = 5000  # Confirma que este valor refleja correctamente la meta a
 RETIRO_SEMANAL = 700  # Ajustar si es necesario para alinearse con la estrategia planificada
 PROFIT_SEMANAL_MIENTRAS_SUBE = 450  # Profit semanal hasta llegar a $5000
 PROFIT_SEMANAL_OBJETIVO = (850, 1000)  # Rango de profit entre $850 y $1000 después de los $5000
+
+@dataclass
+class TradingAssets:
+    symbol: str
+    precio_compra: float
+    capital: float
+
+    def __str__(self):
+        return f"Symbol: {self.symbol}, Capital actual para el asset: {self.capital} Precio Compra: {self.precio_compra}"
+
+@dataclass
+class Bot:
+    capital_inversion: float
+    umbral_inversion: float
+    retiro: float
+    profit_actual: float
+    profit_objetivo: float
+    assets: list[TradingAssets]
+
+    def __str__(self):
+        assets_str = "\n".join(str(asset) for asset in self.assets)
+
+        return (f"Bot Details:\n"
+                f"Capital Inversion: {self.capital_inversion}\n"
+                f"Umbral Inversion: {self.umbral_inversion}\n"
+                f"Retiro: {self.retiro}\n"
+                f"Profit Actual: {self.profit_actual}\n"
+                f"Profit Objetivo: {self.profit_objetivo}\n"
+                f"Assets:\n{assets_str}")
+
 
 # Función para detectar Ondas de Elliott automáticamente
 def detectar_onda_elliott(df):
@@ -84,8 +114,8 @@ def get_market_data(symbol):
         return None
 
 # Función para ejecutar estrategias de compra y venta
-def ejecutar_trade(symbol, params):
-    logger.info(params)
+def ejecutar_trade(symbol, capital):
+    #logger.info(params)
     df = get_market_data(symbol)
     if df is None:
         return
@@ -98,7 +128,7 @@ def ejecutar_trade(symbol, params):
     volume = df['volume'].iloc[-1]
     volume_ma = df['volume_ma'].iloc[-1]
     
-    trade_amount = params['capital'] / price
+    trade_amount = capital / price
     
     # Estrategia de compra
     if ('Elliott_Wave_2' in df['wave'].values or 'Elliott_Wave_4' in df['wave'].values or 'Elliott_Wave_A' in df['wave'].values or 'Elliott_Wave_C' in df['wave'].values) and rsi < 40 and macd > 0 and ema_7 > ema_25 and adx > 25 and volume > volume_ma:
@@ -113,42 +143,50 @@ def ejecutar_trade(symbol, params):
         enviar_alerta_telegram(f'✅ Venta en {symbol} a {price}')
 
 # Función para obtener balance y distribuir capital dinámicamente
-def get_dynamic_capital():
+def get_dynamic_capital(bot: Bot):
     try:
-        balance = binance.fetch_balance()
-        usdt_balance = balance['total'].get('USDT', 0)
-        logger.info(usdt_balance)
-        if usdt_balance >= UMBRAL_CAPITAL:
-            withdraw_amount = min(RETIRO_SEMANAL, usdt_balance - UMBRAL_CAPITAL)
-            enviar_alerta_telegram(f'🔄 Retirando {withdraw_amount} USDT. Resto será reutilizado como capital.')
-            usdt_balance -= withdraw_amount
+        if os.getenv('ENV') == 'DEV':
+            logger.info("Test mode")
+            usdt_balance = 1000
+            balance = binance.fetch_balance()
+            floki_balance = balance['total'].get('FLOKI', 0)
+            logger.info(floki_balance)
+
+        else:
+            balance = binance.fetch_balance()
+            usdt_balance = balance['total'].get('USDT', 0)
+            floki_balance = balance['total'].get('FLOKI', 0)
+            if usdt_balance >= UMBRAL_CAPITAL:
+                withdraw_amount = min(RETIRO_SEMANAL, usdt_balance - UMBRAL_CAPITAL)
+                enviar_alerta_telegram(f'🔄 Retirando {withdraw_amount} USDT. Resto será reutilizado como capital.')
+                usdt_balance -= withdraw_amount
+            
+            if usdt_balance <= 0:
+                return bot
+        bot.capital_inversion = usdt_balance
+        trading_assets = bot.assets
+        num_activos = len(trading_assets)
         
-        if usdt_balance <= 0:
-            return {}
-        
-        num_activos = len(assets)
         capital_por_activo = usdt_balance / num_activos
-        for symbol in assets:
-            assets[symbol]['capital'] = capital_por_activo
+        for asset in trading_assets:
+            asset.capital = capital_por_activo
+        bot.assets=trading_assets
         logger.info("Se obtuvo el capital")
-        return assets
+        return bot
     except Exception as e:
         logger.error(f'Error al obtener balance: {e}')
         enviar_alerta_telegram(f'⚠️ Error al obtener balance: {e}')
-        return {}
+        return bot
 
     
-def start_trading():
+def start_trading(bot: Bot):
     logger.info("Nuevo ciclo del bot")
-    assets_con_capital = get_dynamic_capital()
-    if not assets_con_capital:
-        enviar_alerta_telegram('⚠️ No hay capital disponible para operar.')
-        return
-
+    assets_con_capital = get_dynamic_capital(bot)
+    enviar_alerta_telegram(str(trading_bot))
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_symbol = {
-            executor.submit(ejecutar_trade, symbol, params): symbol
-            for symbol, params in assets_con_capital.items()
+             executor.submit(ejecutar_trade, asset.symbol, asset.capital): asset.symbol
+            for asset in bot.assets if asset.capital > 0  # Only trade assets with capital
         }
         for future in concurrent.futures.as_completed(future_to_symbol):
             symbol = future_to_symbol[future]
@@ -162,9 +200,26 @@ if __name__ == '__main__':
 
     try:
         enviar_alerta_telegram('🤖 Bot de trading optimizado iniciado.')
+        assets = [TradingAssets("FLOKI/USDT", 0, 0), 
+                  TradingAssets("DOGE/USDT", 0, 0),
+                  TradingAssets("BTC/USDT", 0, 0),
+                  TradingAssets("DOT/USDT", 0, 0),]
+
+        trading_bot = Bot(
+            capital_inversion=500,
+            umbral_inversion=1000,
+            retiro=200,
+            profit_actual=0,
+            profit_objetivo= 1000,
+            assets=assets,
+        )
+        #assets_con_capital = get_dynamic_capital(trading_bot)
+
+        
         while True:
-            start_trading()
+            start_trading(trading_bot)
             time.sleep(60)  # Intervalo de verificación
+        
     except Exception as e:
         logger.error(f'Error en el bot: {e}')
         enviar_alerta_telegram(f'⚠️ Error en el bot: {e}')

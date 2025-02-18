@@ -15,7 +15,7 @@ def enviar_alerta_telegram(mensaje):
     for id in chat_ids:
         payload = {'chat_id': id, 'text': mensaje}
         requests.post(url, data=payload)
-    logger.info("Mensajes a telegram enviados")
+    #logger.info("Mensajes a telegram enviados")
 
 if __name__ == "__main__":
     enviar_alerta_telegram("Hola")
