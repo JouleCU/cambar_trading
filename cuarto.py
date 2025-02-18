@@ -47,6 +47,8 @@ class TradingAssets:
     symbol: str
     precio_compra: float
     capital: float
+    profit: float
+    compra_anterior: bool
 
     def __str__(self):
         return f"Symbol: {self.symbol}, Capital actual para el asset: {self.capital} Precio Compra: {self.precio_compra}"
@@ -114,9 +116,9 @@ def get_market_data(symbol):
         return None
 
 # Función para ejecutar estrategias de compra y venta
-def ejecutar_trade(symbol, capital):
+def ejecutar_trade(asset: TradingAssets):
     #logger.info(params)
-    df = get_market_data(symbol)
+    df = get_market_data(asset.symbol)
     if df is None:
         return
     price = df['close'].iloc[-1]
@@ -128,19 +130,22 @@ def ejecutar_trade(symbol, capital):
     volume = df['volume'].iloc[-1]
     volume_ma = df['volume_ma'].iloc[-1]
     
-    trade_amount = capital / price
+    trade_amount = asset.capital / price
     
     # Estrategia de compra
     if ('Elliott_Wave_2' in df['wave'].values or 'Elliott_Wave_4' in df['wave'].values or 'Elliott_Wave_A' in df['wave'].values or 'Elliott_Wave_C' in df['wave'].values) and rsi < 40 and macd > 0 and ema_7 > ema_25 and adx > 25 and volume > volume_ma:
         #if str.upper(os.getenv('BUY')) == "YES":
             #order = binance.create_market_buy_order(symbol, trade_amount)
-        enviar_alerta_telegram(f'🚀 Compra en {symbol} a {price}')
+        asset.precio_compra = price
+        enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {price}')
     
-    # Estrategia de venta
-    if ('Elliott_Wave_B' in df['wave'].values or 'Elliott_Wave_3' in df['wave'].values or 'Elliott_Wave_5' in df['wave'].values or rsi > 70 or macd < 0 or ema_7 < ema_25):
-        #if str.upper(os.getenv('SELL')) == "YES":
-            #binance.create_market_sell_order(symbol, trade_amount)
-        enviar_alerta_telegram(f'✅ Venta en {symbol} a {price}')
+    if asset.compra_anterior:
+        # Estrategia de venta
+        if ('Elliott_Wave_B' in df['wave'].values or 'Elliott_Wave_3' in df['wave'].values or 'Elliott_Wave_5' in df['wave'].values or rsi > 70 or macd < 0 or ema_7 < ema_25):
+            #if str.upper(os.getenv('SELL')) == "YES":
+                #binance.create_market_sell_order(symbol, trade_amount)
+            asset.profit = asset.precio_compra - price
+            enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price}')
 
 # Función para obtener balance y distribuir capital dinámicamente
 def get_dynamic_capital(bot: Bot):
@@ -185,7 +190,7 @@ def start_trading(bot: Bot):
     enviar_alerta_telegram(str(trading_bot))
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_symbol = {
-             executor.submit(ejecutar_trade, asset.symbol, asset.capital): asset.symbol
+             executor.submit(ejecutar_trade, asset): asset.symbol
             for asset in bot.assets if asset.capital > 0  # Only trade assets with capital
         }
         for future in concurrent.futures.as_completed(future_to_symbol):
@@ -194,16 +199,16 @@ def start_trading(bot: Bot):
                 future.result()  # Catch any exceptions from the thread
             except Exception as e:
                 print(f"Error in trade {symbol}: {e}")
-
+    
 
 if __name__ == '__main__':
 
     try:
         enviar_alerta_telegram('🤖 Bot de trading optimizado iniciado.')
-        assets = [TradingAssets("FLOKI/USDT", 0, 0), 
-                  TradingAssets("DOGE/USDT", 0, 0),
-                  TradingAssets("BTC/USDT", 0, 0),
-                  TradingAssets("DOT/USDT", 0, 0),]
+        assets = [TradingAssets("FLOKI/USDT", 0, 0, 0, False), 
+                  TradingAssets("DOGE/USDT", 0, 0, 0, False),
+                  TradingAssets("BTC/USDT", 0, 0, 0, False),
+                  TradingAssets("DOT/USDT", 0, 0, 0, False),]
 
         trading_bot = Bot(
             capital_inversion=500,
