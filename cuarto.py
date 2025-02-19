@@ -51,7 +51,7 @@ class TradingAssets:
     compra_anterior: bool
 
     def __str__(self):
-        return f"Symbol: {self.symbol}, Capital actual para el asset: {self.capital} Precio Compra: {self.precio_compra}"
+        return f"▶ Symbol: {self.symbol}, Capital actual para el asset: {self.capital} Precio Compra: {self.precio_compra}"
 
 @dataclass
 class Bot:
@@ -131,31 +131,33 @@ def ejecutar_trade(asset: TradingAssets):
     volume_ma = df['volume_ma'].iloc[-1]
     
     trade_amount = asset.capital / price
-    
-    # Estrategia de compra
-    if ('Elliott_Wave_2' in df['wave'].values or 'Elliott_Wave_4' in df['wave'].values or 'Elliott_Wave_A' in df['wave'].values or 'Elliott_Wave_C' in df['wave'].values) and rsi < 40 and macd > 0 and ema_7 > ema_25 and adx > 25 and volume > volume_ma:
-        #if str.upper(os.getenv('BUY')) == "YES":
-            #order = binance.create_market_buy_order(symbol, trade_amount)
-        asset.precio_compra = price
-        enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {price}')
-    
+    if not asset.compra_anterior:
+        # Estrategia de compra
+        if ('Elliott_Wave_2' in df['wave'].values or 'Elliott_Wave_4' in df['wave'].values or 'Elliott_Wave_A' in df['wave'].values or 'Elliott_Wave_C' in df['wave'].values) and rsi < 40 and macd > 0 and ema_7 > ema_25 and adx > 25 and volume > volume_ma:
+            #if str.upper(os.getenv('BUY')) == "YES":
+                #order = binance.create_market_buy_order(symbol, trade_amount)
+            asset.precio_compra = price
+            enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {price}')
+        
     if asset.compra_anterior:
         # Estrategia de venta
         if ('Elliott_Wave_B' in df['wave'].values or 'Elliott_Wave_3' in df['wave'].values or 'Elliott_Wave_5' in df['wave'].values or rsi > 70 or macd < 0 or ema_7 < ema_25):
             #if str.upper(os.getenv('SELL')) == "YES":
                 #binance.create_market_sell_order(symbol, trade_amount)
-            asset.profit = asset.precio_compra - price
-            enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price}')
+            if price > asset.precio_compra:
+                asset.profit = asset.precio_compra - price
+                asset.compra_anterior = False
+                enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price}')
 
 # Función para obtener balance y distribuir capital dinámicamente
 def get_dynamic_capital(bot: Bot):
     try:
         if os.getenv('ENV') == 'DEV':
-            logger.info("Test mode")
+            #logger.info("Test mode")
             usdt_balance = 1000
             balance = binance.fetch_balance()
             floki_balance = balance['total'].get('FLOKI', 0)
-            logger.info(floki_balance)
+            #logger.info(floki_balance)
 
         else:
             balance = binance.fetch_balance()
@@ -187,7 +189,6 @@ def get_dynamic_capital(bot: Bot):
 def start_trading(bot: Bot):
     logger.info("Nuevo ciclo del bot")
     assets_con_capital = get_dynamic_capital(bot)
-    enviar_alerta_telegram(str(trading_bot))
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_symbol = {
              executor.submit(ejecutar_trade, asset): asset.symbol
@@ -220,10 +221,18 @@ if __name__ == '__main__':
         )
         #assets_con_capital = get_dynamic_capital(trading_bot)
 
-        
+        flag = 0
+        if os.getenv('ENV') == 'DEV':
+            logger.info("Tradeando en test con 1000 USDT")
         while True:
+            if flag==10:
+                logger.info("enviando actualización")
+                enviar_alerta_telegram(str(trading_bot))
+                flag = 0
             start_trading(trading_bot)
+            flag+=1
             time.sleep(60)  # Intervalo de verificación
+            
         
     except Exception as e:
         logger.error(f'Error en el bot: {e}')
