@@ -132,21 +132,29 @@ def ejecutar_trade(asset: TradingAssets):
     
     trade_amount = asset.capital / price
     if not asset.compra_anterior:
+        unique_waves = [wave for wave in df['wave'].unique() if wave != '']
+        logger.info(f"\n[{asset.symbol}] Precio: {price:.4f} | RSI: {rsi:.4f} | MACD: {macd:.4f} | EMA_7: {ema_7:.4f} | EMA_25: {ema_25:.4f} | ADX: {adx:.4f} | Volumen: {volume:.4f} | Volumen MA: {volume_ma:.4f}")
+        logger.info(f"Unique waves: {unique_waves}")
         # Estrategia de compra
         if ('Elliott_Wave_2' in df['wave'].values or 'Elliott_Wave_4' in df['wave'].values or 'Elliott_Wave_A' in df['wave'].values or 'Elliott_Wave_C' in df['wave'].values) and rsi < 40 and macd > 0 and ema_7 > ema_25 and adx > 25 and volume > volume_ma:
             #if str.upper(os.getenv('BUY')) == "YES":
                 #order = binance.create_market_buy_order(symbol, trade_amount)
             asset.precio_compra = price
+            logger.info(f'Compra en {asset.symbol} a {price}')
             enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {price}')
         
     if asset.compra_anterior:
+
         # Estrategia de venta
         if ('Elliott_Wave_B' in df['wave'].values or 'Elliott_Wave_3' in df['wave'].values or 'Elliott_Wave_5' in df['wave'].values or rsi > 70 or macd < 0 or ema_7 < ema_25):
             #if str.upper(os.getenv('SELL')) == "YES":
                 #binance.create_market_sell_order(symbol, trade_amount)
+            logger.info("Intención de vender")
             if price > asset.precio_compra:
-                asset.profit = asset.precio_compra - price
+                
+                asset.profit =  asset.capital*(price - asset.precio_compra )
                 asset.compra_anterior = False
+                logger.info(f'Venta realizada en {asset.symbol} a {price} | Profit: {asset.profit}')
                 enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price}')
 
 # Función para obtener balance y distribuir capital dinámicamente
@@ -206,10 +214,12 @@ if __name__ == '__main__':
 
     try:
         enviar_alerta_telegram('🤖 Bot de trading optimizado iniciado.')
-        assets = [TradingAssets("FLOKI/USDT", 0, 0, 0, False), 
+        assets = [
+                #TradingAssets("FLOKI/USDT", 0, 0, 0, False), 
                   TradingAssets("DOGE/USDT", 0, 0, 0, False),
-                  TradingAssets("BTC/USDT", 0, 0, 0, False),
-                  TradingAssets("DOT/USDT", 0, 0, 0, False),]
+                  #TradingAssets("BTC/USDT", 97457.14 , 0, 0, True),
+                  TradingAssets("DOT/USDT", 4.96, 0, 0, True),
+                  ]
 
         trading_bot = Bot(
             capital_inversion=500,
