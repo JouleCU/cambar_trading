@@ -1,5 +1,4 @@
 import ccxt
-from dataclasses import dataclass
 from loguru import logger
 import os
 import threading
@@ -11,6 +10,7 @@ import ta
 import pandas as pd
 from dotenv import load_dotenv
 from message import enviar_alerta_telegram
+from trading_logic import *
 
 load_dotenv()
 
@@ -41,38 +41,6 @@ UMBRAL_CAPITAL = 5000  # Confirma que este valor refleja correctamente la meta a
 RETIRO_SEMANAL = 700  # Ajustar si es necesario para alinearse con la estrategia planificada
 PROFIT_SEMANAL_MIENTRAS_SUBE = 450  # Profit semanal hasta llegar a $5000
 PROFIT_SEMANAL_OBJETIVO = (850, 1000)  # Rango de profit entre $850 y $1000 después de los $5000
-
-@dataclass
-class TradingAssets:
-    symbol: str
-    precio_compra: float
-    capital: float
-    profit: float
-    compra_anterior: bool
-
-    def __str__(self):
-        return f"▶ Symbol: {self.symbol}, Capital actual para el asset: {self.capital} Precio Compra: {self.precio_compra}"
-
-@dataclass
-class Bot:
-    capital_inversion: float
-    umbral_inversion: float
-    retiro: float
-    profit_actual: float
-    profit_objetivo: float
-    assets: list[TradingAssets]
-
-    def __str__(self):
-        assets_str = "\n".join(str(asset) for asset in self.assets)
-
-        return (f"Bot Details:\n"
-                f"Capital Inversion: {self.capital_inversion}\n"
-                f"Umbral Inversion: {self.umbral_inversion}\n"
-                f"Retiro: {self.retiro}\n"
-                f"Profit Actual: {self.profit_actual}\n"
-                f"Profit Objetivo: {self.profit_objetivo}\n"
-                f"Assets:\n{assets_str}")
-
 
 # Función para detectar Ondas de Elliott automáticamente
 def detectar_onda_elliott(df):
@@ -136,10 +104,15 @@ def ejecutar_trade(asset: TradingAssets):
         logger.info(f"\n[{asset.symbol}] Precio: {price:.4f} | RSI: {rsi:.4f} | MACD: {macd:.4f} | EMA_7: {ema_7:.4f} | EMA_25: {ema_25:.4f} | ADX: {adx:.4f} | Volumen: {volume:.4f} | Volumen MA: {volume_ma:.4f}")
         logger.info(f"Unique waves: {unique_waves}")
         # Estrategia de compra
-        if ('Elliott_Wave_2' in df['wave'].values or 'Elliott_Wave_4' in df['wave'].values or 'Elliott_Wave_A' in df['wave'].values or 'Elliott_Wave_C' in df['wave'].values) and rsi < 40 and macd > 0 and ema_7 > ema_25 and adx > 25 and volume > volume_ma:
+        if (( 'Elliott_Wave_2' in df['wave'].values or 
+          'Elliott_Wave_4' in df['wave'].values or 
+          'Elliott_Wave_A' in df['wave'].values or 
+          'Elliott_Wave_C' in df['wave'].values ) and 
+        rsi < 50 and macd > -0.05 and ema_7 >= ema_25 and adx > 20 and volume > volume_ma):
             #if str.upper(os.getenv('BUY')) == "YES":
                 #order = binance.create_market_buy_order(symbol, trade_amount)
             asset.precio_compra = price
+            asset.cantidad_compra = trade_amount
             logger.info(f'Compra en {asset.symbol} a {price}')
             enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {price}')
         
@@ -147,15 +120,15 @@ def ejecutar_trade(asset: TradingAssets):
 
         # Estrategia de venta
         if ('Elliott_Wave_B' in df['wave'].values or 'Elliott_Wave_3' in df['wave'].values or 'Elliott_Wave_5' in df['wave'].values or rsi > 70 or macd < 0 or ema_7 < ema_25):
-            #if str.upper(os.getenv('SELL')) == "YES":
-                #binance.create_market_sell_order(symbol, trade_amount)
+        
             logger.info("Intención de vender")
             if price > asset.precio_compra:
-                
-                asset.profit =  asset.capital*(price - asset.precio_compra )
+                #if str.upper(os.getenv('SELL')) == "YES":
+                    #binance.create_market_sell_order(symbol, asset.cantidad_compra)
+                asset.profit =  price*(asset.cantidad_compra) - asset.capital
                 asset.compra_anterior = False
                 logger.info(f'Venta realizada en {asset.symbol} a {price} | Profit: {asset.profit}')
-                enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price}')
+                enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price} | Ganancia: {asset.profit:.4f} USDT')
 
 # Función para obtener balance y distribuir capital dinámicamente
 def get_dynamic_capital(bot: Bot):
@@ -215,10 +188,10 @@ if __name__ == '__main__':
     try:
         enviar_alerta_telegram('🤖 Bot de trading optimizado iniciado.')
         assets = [
-                #TradingAssets("FLOKI/USDT", 0, 0, 0, False), 
-                  TradingAssets("DOGE/USDT", 0, 0, 0, False),
-                  #TradingAssets("BTC/USDT", 97457.14 , 0, 0, True),
-                  TradingAssets("DOT/USDT", 4.96, 0, 0, True),
+                TradingAssets("FLOKI/USDT", capital=0, precio_compra = 0, cantidad_compra=0, profit=0, compra_anterior=False), 
+                TradingAssets("DOGE/USDT", capital=0, precio_compra = 0, cantidad_compra=0, profit=0, compra_anterior=False), 
+                TradingAssets("BTC/USDT", capital=250, precio_compra = 97457.14, cantidad_compra=0, profit=0, compra_anterior=True), 
+                TradingAssets("DOT/USDT", capital=250, precio_compra = 4.9, cantidad_compra=0, profit=0, compra_anterior=True), 
                   ]
 
         trading_bot = Bot(
@@ -234,6 +207,8 @@ if __name__ == '__main__':
         flag = 0
         if os.getenv('ENV') == 'DEV':
             logger.info("Tradeando en test con 1000 USDT")
+            trading_bot.assets[2].update_trading_amount()
+            trading_bot.assets[3].update_trading_amount()
         while True:
             if flag==10:
                 logger.info("enviando actualización")
