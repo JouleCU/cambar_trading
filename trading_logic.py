@@ -9,6 +9,7 @@ from scipy.signal import find_peaks
 from dataclasses import dataclass
 from loguru import logger
 import time
+from datetime import datetime
 
 # Umbrales de capital y retiros
 UMBRAL_CAPITAL = 5000  # Capital objetivo antes de activar retiros
@@ -75,34 +76,41 @@ class Bot:
                 f"Profit Objetivo: {self.profit_objetivo}\n"
                 f"Assets:\n{assets_str}")
 
-
-def comprar_asset(binance,asset: TradingAssets,  trade_amount, price,  tipo):
-    
-    #asset.precio_compra = price
-    #asset.cantidad_compra = trade_amount
+def comprar_asset(binance,asset: TradingAssets,  trade_amount, price,  tipo):    
     if str.upper(os.getenv('ENV')) == "DEV":
-        logger.info(f'Compra en {asset.symbol} a {price}')
+        logger.info(f'Compra DEV en {asset.symbol} a {price}')
         enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {price}')
         return 
     
-    if tipo == 'limit':
+    if tipo == 'LIMIT':
         order = binance.create_limit_buy_order(asset.symbol, trade_amount, price * 0.995)  # 0.5% por debajo para evitar slippage
-        logger.info(f'Compra LIMIT en {asset.symbol} a {price}')
-        enviar_alerta_telegram(f'🚀 Compra LIMIT en {asset.symbol} a {price}')
-        return order
+        
+    else:
+        order = binance.create_market_buy_order(asset.symbol, trade_amount)
     
-    order = binance.create_market_buy_order(asset.symbol, trade_amount)
-    logger.info(f'Compra en {asset.symbol} a {price}')
+    asset.precio_compra = price
+    asset.cantidad_compra = trade_amount
+    logger.info(f'Compra {tipo} en {asset.symbol} a {price}')
     enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {price}')
     return order
 
-def vender_asset(binance, symbol, price, asset: TradingAssets):
-    if str.upper(os.getenv('SELL')) == "YES":
-        binance.create_market_sell_order(symbol, asset.cantidad_compra)
+def vender_asset(binance,asset: TradingAssets,  trade_amount, price,  tipo):    
+    if str.upper(os.getenv('ENV')) == "DEV":
+        logger.info(f'v DEV en {asset.symbol} a {price}')
+        enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price}')
+        return 
+    
+    if tipo == 'LIMIT':
+        order = binance.create_limit_buy_order(asset.symbol, trade_amount, price * 0.995)  # 0.5% por debajo para evitar slippage
+        
+    else:
+        order = binance.create_market_buy_order(asset.symbol, trade_amount)
+    
     asset.profit =  price*(asset.cantidad_compra) - asset.capital
     asset.compra_anterior = False
-    logger.info(f'Venta realizada en {asset.symbol} a {price} | Profit: {asset.profit}')
-    enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {price} | Ganancia: {asset.profit:.4f} USDT')
+    logger.info(f'Venta {tipo} en {asset.symbol} a {price}')
+    enviar_alerta_telegram(f'✅ Venta {tipo} en {asset.symbol} a {price} | Ganancia: {asset.profit:.4f} USDT')
+    return order
 
 def get_market_data(binance, asset: TradingAssets):
     try:
@@ -249,23 +257,35 @@ def redistribuir(bot: Bot):
             profits_semanales = 0
             enviar_alerta_telegram(f'💰 Retiro semanal de {RETIRO_SEMANAL} USD realizado. Capital actual: {capital_actual}')
 
+def sl_tp_dinamico(asset: TradingAssets, df, current_price):
+    
+    # Stop Loss dinámico para scalping (FLOKI/DOGE), fijo para swing (BTC/SOL)
+    dynamic_sl = min(0.015, 1.5 * df['atr'].iloc[-1] / current_price) if asset.strategy == 'scalping' else asset.sl
+    sl_price = current_price - (current_price * dynamic_sl)
+    tp_price = current_price * (1 + asset.tp)
+    return sl_price, tp_price
+
 def estrategia_compra(binance, asset: TradingAssets, df, volume_threshold, current_price, trade_amount):
     # Estrategia de compra (optimizada para maximizar ganancias, sin depender de Ondas de Elliott)
     if (df['smc_zone'].iloc[-1] in ['Potential_Accumulation', 'Fair_Value_Gap']) \
        and df['rsi'].iloc[-1] < 55 and df['close'].iloc[-1] > df['ema_20'].iloc[-1] * 0.98 \
        and df['volume'].iloc[-1] > volume_threshold \
        and (df['stoch_k'].iloc[-1] < 20 or df['stoch_d'].iloc[-1] < 20):
-        
-        # Stop Loss dinámico para scalping (FLOKI/DOGE), fijo para swing (BTC/SOL)
-        dynamic_sl = min(0.015, 1.5 * df['atr'].iloc[-1] / current_price) if asset.strategy == 'scalping' else asset.sl
-        sl_price = current_price - (current_price * dynamic_sl)
-        tp_price = current_price * (1 + asset.tp)
+        sl_price, tp_price = sl_tp_dinamico(asset, df, current_price)
         try:
             if asset.strategy == 'scalping':  # Orden limitada para FLOKI/DOGE
-                order = binance.create_limit_buy_order(asset.symbol, asset.cantidad_compra, current_price * 0.995)  # 0.5% por debajo para evitar slippage
-                comprar_asset(binance,asset, current_price,trade_amount)
+                order = comprar_asset(binance, asset, 
+                                      trade_amount = trade_amount,
+                                      price = current_price * 0.995,
+                                      tipo  = "LIMIT")
+                #order = binance.create_limit_buy_order(asset.symbol, asset.cantidad_compra, )  # 0.5% por debajo para evitar slippage
+                
             else:  # Orden de mercado para BTC/SOL
-                order = binance.create_market_buy_order(asset.symbol, asset.cantidad_compra)
+                #order = binance.create_market_buy_order(asset.symbol, asset.cantidad_compra)
+                order = comprar_asset(binance, asset, 
+                                      trade_amount = trade_amount,
+                                      price = current_price ,
+                                      tipo  = "NORMAL")
             
             '''
             # Verificar slippage para órdenes limitadas
@@ -294,4 +314,100 @@ def estrategia_compra(binance, asset: TradingAssets, df, volume_threshold, curre
         capital_por_moneda[asset.symbol] += profit_potential
         capital_actual += profit_potential
         profits_semanales += profit_potential
-        enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {current_price}, cantidad: {asset.cantidad_compra}, SL: {sl_price:.6f}, TP: {tp_price:.6f}')
+        #enviar_alerta_telegram(f'🚀 Compra en {asset.symbol} a {current_price}, cantidad: {asset.cantidad_compra}, SL: {sl_price:.6f}, TP: {tp_price:.6f}')
+
+def estrategia_venta(binance, asset: TradingAssets, df, volume_threshold, current_price, trade_amount):
+    # Estrategia de venta (optimizada para maximizar ganancias, sin depender de Ondas de Elliott)
+    if (df['smc_zone'].iloc[-1] == 'Potential_Distribution') \
+       and df['rsi'].iloc[-1] > 55 and df['close'].iloc[-1] < df['ema_20'].iloc[-1] * 1.02 \
+       and df['volume'].iloc[-1] > volume_threshold \
+       and (df['stoch_k'].iloc[-1] > 80 or df['stoch_d'].iloc[-1] > 80):
+        # Stop Loss dinámico para scalping (FLOKI/DOGE), fijo para swing (BTC/SOL)
+        sl_price, tp_price = sl_tp_dinamico(asset, df, current_price)
+        try:
+            if asset.strategy == 'scalping':  # Orden limitada para FLOKI/DOGE
+                order = vender_asset(binance, asset, 
+                                      trade_amount = trade_amount,
+                                      price = current_price * 1.005,
+                                      tipo  = "LIMIT")
+                #order = binance.create_limit_sell_order(asset.symbol, trade_amount, current_price * 1.005)  # 0.5% por encima para evitar slippage
+                
+            else:  # Orden de mercado para BTC/SOL
+                #order = binance.create_market_sell_order(asset.symbol, trade_amount)
+                order = vender_asset(binance, asset, 
+                                      trade_amount = trade_amount,
+                                      price = current_price ,
+                                      tipo  = "NORMAL")
+            '''
+            # Verificar slippage para órdenes limitadas
+            if assets[symbol]['strategy'] == 'scalping':
+                time.sleep(5)  # Esperar 5 segundos para verificar ejecución
+                order_status = binance.fetch_order(order['id'], symbol)
+                executed_price = order_status['average'] if order_status['average'] else current_price
+                slippage = abs((executed_price - (current_price * 1.005)) / (current_price * 1.005))
+                if slippage > 0.005:  # Slippage > 0.5%
+                    logging.warning(f"⚠️ Slippage alto en {symbol}: {slippage*100:.2f}%")
+                    enviar_alerta_telegram(f'⚠️ Slippage alto en {symbol}: {slippage*100:.2f}%')
+            
+            # Verificar estado de la orden después de 30 segundos (opcional, comentar si no es necesario)
+            time.sleep(30)
+            order_status = binance.fetch_order(order['id'], symbol)
+            if order_status['status'] != 'closed':
+                binance.cancel_order(order['id'], symbol)
+                logging.warning(f"Orden limitada no ejecutada para {symbol}, cancelada.")
+                enviar_alerta_telegram(f'⚠️ Orden limitada no ejecutada para {symbol}, cancelada.')
+            '''
+        except ccxt.BaseError as e:
+            logger.error(f"Error en la orden de venta en {asset.symbol}: {e}")
+            enviar_alerta_telegram(f'⚠️ Error en la orden de venta en {asset.symbol}: {e}')
+            return
+        profit_potential = trade_amount * (current_price - tp_price) * (1 - 2 * COMMISSION_RATE)  # Ajuste por comisiones de compra/venta
+        capital_por_moneda[asset.symbol] += profit_potential
+        capital_actual += profit_potential
+        profits_semanales += profit_potential
+        enviar_alerta_telegram(f'✅ Venta en {asset.symbol} a {current_price}, cantidad: {trade_amount}, SL: {sl_price:.6f}, TP: {tp_price:.6f}')
+
+
+# Función para ejecutar trades con órdenes optimizadas, manejo de errores, comisiones, slippage y stop loss dinámico
+def ejecutar_trade(symbol, params):
+    global capital_actual, capital_por_moneda, profits_semanales, ultimo_retiro
+    
+    df = get_market_data(symbol)
+    if df is None or (symbol in ['FLOKI/USDT', 'DOGE/USDT'] and df['volume'].iloc[-1] * df['close'].iloc[-1] < (800000 if symbol == 'FLOKI/USDT' else 2000000)):
+        return
+    
+    current_time = datetime.now(datetime.timezone.utc).hour
+    if 0 <= current_time < 6:
+        logging.info(f"Horas de baja volatilidad en {symbol}, operación pospuesta.")
+        return
+    
+    current_price = df['close'].iloc[-1]
+    volume_mean = df['volume'].rolling(window=20).mean().iloc[-1]
+    atr = df['atr'].iloc[-1]
+    trade_amount = round(capital_por_moneda[symbol] / (current_price * (1 + COMMISSION_RATE)), 6)  # Ajuste para comisiones
+    
+    # Validación de monto mínimo de Binance
+    if trade_amount < binance.markets[symbol]['limits']['amount']['min']:
+        logging.warning(f"⚠️ Monto de trade demasiado bajo en {symbol}, evitando orden.")
+        enviar_alerta_telegram(f'⚠️ Monto de trade demasiado bajo en {symbol}.')
+        return
+    
+    # Verificar capital antes de operar
+    if capital_por_moneda[symbol] < 50:  # Mínimo para operar por moneda
+        logging.warning(f'Capital insuficiente para {symbol}: {capital_por_moneda[symbol]}')
+        enviar_alerta_telegram(f'⚠️ Capital insuficiente para {symbol}: {capital_por_moneda[symbol]}')
+        return
+    
+    # Filtro de tendencia con ADX ajustado
+    adx_threshold = 20 if assets[symbol]['strategy'] == 'scalping' else 25
+    if df['adx'].iloc[-1] < adx_threshold:  # ADX bajo indica rango, evita operaciones
+        return
+    
+    # Ajuste dinámico de umbral de volumen por volatilidad
+    volume_threshold = volume_mean * (1.05 + 0.1 * (df['atr'].iloc[-1] / df['atr'].mean()))
+    estrategia_compra(binance, asset: TradingAssets, df, volume_threshold, current_price, trade_amount)
+
+    estrategia_venta(binance, asset: TradingAssets, df, volume_threshold, current_price, trade_amount)
+    
+    
+    redistribuir()
